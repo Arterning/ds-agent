@@ -2,11 +2,13 @@
 Context compaction — budget, snip, micro, full compact, reactive compact.
 
 Layered strategy:
-1. tool_result_budget — cap the last message's tool_result content
+1. tool_result_budget — cap oversized tool-result content
 2. snip_compact         — remove a middle chunk of old messages
 3. micro_compact        — stub out older tool results
 4. compact_history      — summarise via LLM
 5. reactive_compact     — summarise + keep tail after prompt-too-long error
+
+All functions operate on OpenAI-format message lists (role=tool for results).
 """
 
 import json, time
@@ -17,50 +19,48 @@ from agent.config import (
     CONTEXT_LIMIT, KEEP_RECENT_TOOL_RESULTS, PERSIST_THRESHOLD,
     MODEL, client,
 )
-from agent.utils import extract_text
+from agent.utils import extract_text, sanitize, sanitize_json
 
 
 def estimate_size(messages: list) -> int:
-    return len(json.dumps(messages, default=str))
-
-
-def _block_type(block):
-    return block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
+    return len(json.dumps(sanitize_json(messages), default=str))
 
 
 def message_has_tool_use(message: dict) -> bool:
+    """Return True when an assistant message has pending tool_calls."""
     if message.get("role") != "assistant":
         return False
+    # Check message-level tool_calls key (OpenAI format)
+    if message.get("tool_calls"):
+        return True
+    # Also check nested inside content (for Anthropic-style blocks if any remain)
     content = message.get("content")
-    if content is None:
-        return False
-    if not isinstance(content, list):
-        return getattr(content, "tool_calls", None) is not None and bool(content.tool_calls)
-    return any(_block_type(block) in ("tool_use", "tool_calls") for block in content)
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in ("tool_use", "tool_calls"):
+                return True
+    return False
 
 
 def is_tool_result_message(message: dict) -> bool:
-    if message.get("role") not in ("user", "tool"):
-        return False
-    content = message.get("content")
-    if not isinstance(content, list):
-        return False
-    return any(
-        isinstance(block, dict) and block.get("type") == "tool_result"
-        for block in content
-    )
+    """Return True for role=tool messages (OpenAI format) or legacy user messages
+    containing tool_result blocks."""
+    if message.get("role") == "tool":
+        return True
+    # Legacy support: user message with tool_result blocks inside
+    if message.get("role") == "user":
+        content = message.get("content")
+        if isinstance(content, list):
+            return any(
+                isinstance(b, dict) and b.get("type") == "tool_result"
+                for b in content
+            )
+    return False
 
 
-def collect_tool_results(messages: list) -> list[tuple[int, int, dict]]:
-    found = []
-    for mi, msg in enumerate(messages):
-        content = msg.get("content")
-        if msg.get("role") not in ("user", "tool") or not isinstance(content, list):
-            continue
-        for bi, block in enumerate(content):
-            if isinstance(block, dict) and block.get("type") == "tool_result":
-                found.append((mi, bi, block))
-    return found
+def collect_tool_results(messages: list) -> list[dict]:
+    """Return every role=tool message in order."""
+    return [msg for msg in messages if msg.get("role") == "tool"]
 
 
 def persist_large_output(tool_use_id: str, output: str) -> str:
@@ -75,26 +75,30 @@ def persist_large_output(tool_use_id: str, output: str) -> str:
 
 
 def tool_result_budget(messages: list, max_bytes: int = 200_000) -> list:
+    """Persist the largest tool-result contents to disk if the last batch exceeds max_bytes."""
     if not messages:
         return messages
-    last = messages[-1]
-    content = last.get("content")
-    if last.get("role") not in ("user", "tool") or not isinstance(content, list):
+    # Find the contiguous tail of role=tool messages
+    tool_msgs = []
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") == "tool":
+            tool_msgs.insert(0, messages[i])
+        else:
+            break
+    if not tool_msgs:
         return messages
-    blocks = [(i, b) for i, b in enumerate(content)
-              if isinstance(b, dict) and b.get("type") == "tool_result"]
-    total = sum(len(str(b.get("content", ""))) for _, b in blocks)
+    total = sum(len(str(m.get("content", ""))) for m in tool_msgs)
     if total <= max_bytes:
         return messages
-    for _, block in sorted(blocks,
-                           key=lambda pair: len(str(pair[1].get("content", ""))),
-                           reverse=True):
+    for m in sorted(tool_msgs,
+                    key=lambda m: len(str(m.get("content", ""))),
+                    reverse=True):
         if total <= max_bytes:
             break
-        text = str(block.get("content", ""))
-        block["content"] = persist_large_output(
-            block.get("tool_use_id", "unknown"), text)
-        total = sum(len(str(b.get("content", ""))) for _, b in blocks)
+        text = str(m.get("content", ""))
+        m["content"] = persist_large_output(
+            m.get("tool_call_id", "unknown"), text)
+        total = sum(len(str(mm.get("content", ""))) for mm in tool_msgs)
     return messages
 
 
@@ -118,12 +122,13 @@ def snip_compact(messages: list, max_messages: int = 50) -> list:
 
 
 def micro_compact(messages: list) -> list:
+    """Stub out older tool-result contents so the context stays under budget."""
     tool_results = collect_tool_results(messages)
     if len(tool_results) <= KEEP_RECENT_TOOL_RESULTS:
         return messages
-    for _, _, block in tool_results[:-KEEP_RECENT_TOOL_RESULTS]:
-        if len(str(block.get("content", ""))) > 120:
-            block["content"] = "[Earlier tool result compacted. Re-run if needed.]"
+    for m in tool_results[:-KEEP_RECENT_TOOL_RESULTS]:
+        if len(str(m.get("content", ""))) > 120:
+            m["content"] = "[Earlier tool result compacted. Re-run if needed.]"
     return messages
 
 
@@ -132,18 +137,18 @@ def write_transcript(messages: list) -> Path:
     path = TRANSCRIPT_DIR / f"transcript_{int(time.time())}.jsonl"
     with path.open("w") as f:
         for msg in messages:
-            f.write(json.dumps(msg, default=str) + "\n")
+            f.write(json.dumps(sanitize_json(msg), default=str) + "\n")
     return path
 
 
 def summarize_history(messages: list) -> str:
-    conversation = json.dumps(messages, default=str)[:80000]
+    conversation = json.dumps(sanitize_json(messages), default=str)[:80000]
     prompt = ("Summarize this coding-agent conversation so work can continue. "
               "Preserve current goal, key findings, changed files, remaining work, "
               "and user constraints.\n\n" + conversation)
     response = client.chat.completions.create(
         model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
+        messages=sanitize_json([{"role": "user", "content": prompt}]),
         max_tokens=2000,
     )
     return extract_text(response.choices[0].message) or "(empty summary)"

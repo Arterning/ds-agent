@@ -11,7 +11,7 @@ from agent.config import MODEL, client, WORKDIR
 from agent.tools.bash import run_bash
 from agent.tools.file import run_read, run_write, run_edit, run_glob
 from agent.hooks import trigger_hooks
-from agent.utils import call_tool_handler, extract_text, has_tool_use
+from agent.utils import call_tool_handler, extract_text, has_tool_use, sanitize_json
 
 SUB_SYSTEM = (
     f"You are a coding subagent at {WORKDIR}. "
@@ -82,7 +82,7 @@ def spawn_subagent(description: str) -> str:
     for _ in range(30):
         response = client.chat.completions.create(
             model=MODEL,
-            messages=[{"role": "system", "content": SUB_SYSTEM}] + messages,
+            messages=sanitize_json([{"role": "system", "content": SUB_SYSTEM}] + messages),
             tools=openai_tools,
             max_tokens=8000,
         )
@@ -108,7 +108,6 @@ def spawn_subagent(description: str) -> str:
         if not assistant_msg.tool_calls:
             break
 
-        results = []
         for tc in assistant_msg.tool_calls:
             tool_name = tc.function.name
             try:
@@ -132,13 +131,11 @@ def spawn_subagent(description: str) -> str:
                 output = call_tool_handler(handler, tool_args, tool_name)
                 trigger_hooks("PostToolUse", block, output)
 
-            results.append({
-                "type": "tool_result",
-                "tool_use_id": tc.id,
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
                 "content": str(output),
             })
-
-        messages.append({"role": "user", "content": results})
 
     for msg in reversed(messages):
         if msg["role"] == "assistant":

@@ -5,15 +5,14 @@ Each iteration:
 1. inject cron / background notifications
 2. prepare context (compaction budget)
 3. call the LLM (OpenAI chat completions)
-4. execute tool calls → collect tool results
+4. execute tool calls → push role=tool messages
 5. loop until the model stops without tool_calls
 """
 
 import json, threading
-from datetime import datetime
 
 from agent.config import (
-    MODEL, client,
+    client,
     DEFAULT_MAX_TOKENS, ESCALATED_MAX_TOKENS,
     MAX_RECOVERY_RETRIES, CONTINUATION_PROMPT,
 )
@@ -26,14 +25,13 @@ from agent.core.compaction import (
 from agent.core.recovery import RecoveryState, with_retry, is_prompt_too_long_error
 from agent.core.context import update_context
 from agent.tools.registry import assemble_tool_pool
-from agent.tools.todo import CURRENT_TODOS
 from agent.systems.background import (
     should_run_background, start_background_task,
     collect_background_results,
 )
 from agent.systems.cron import consume_cron_queue
 from agent.hooks import trigger_hooks
-from agent.utils import has_tool_use, extract_tool_calls, terminal_print, call_tool_handler
+from agent.utils import terminal_print, call_tool_handler
 
 
 agent_lock = threading.Lock()
@@ -62,11 +60,32 @@ def _openai_tools(tool_defs: list[dict]) -> list[dict]:
     return out
 
 
+def _parse_tool_arguments(tc) -> dict:
+    """Parse arguments from a tool_call dict (may be JSON string or already dict)."""
+    args = tc.get("arguments", {})
+    if isinstance(args, str):
+        try:
+            return json.loads(args)
+        except json.JSONDecodeError:
+            return {}
+    return args or {}
+
+
+def _inject_background_notifications(messages: list):
+    """Inject completed background-task results as plain-text user messages."""
+    notes = collect_background_results()
+    for note in notes:
+        messages.append({"role": "user", "content": note})
+
+
+# ── main loop ───────────────────────────────────────────────────────────────
+
 def _call_llm(messages: list, context: dict, tools: list,
               state: RecoveryState, max_tokens: int):
     """Call OpenAI chat completions. System prompt is prepended as a role=system message."""
+    from agent.utils import sanitize_json
     system = assemble_system_prompt(context)
-    full_messages = [{"role": "system", "content": system}] + messages
+    full_messages = sanitize_json([{"role": "system", "content": system}] + messages)
     openai_tools = _openai_tools(tools)
 
     def _do():
@@ -80,35 +99,6 @@ def _call_llm(messages: list, context: dict, tools: list,
     return with_retry(_do, state)
 
 
-def _build_user_content(results: list[dict]) -> list[dict]:
-    """Return tool_result blocks + background notifications as user-side content."""
-    content = list(results)
-    for note in collect_background_results():
-        content.append({"type": "text", "text": note})
-    return content
-
-
-def _inject_background_notifications(messages: list):
-    notes = collect_background_results()
-    if notes:
-        messages.append({"role": "user", "content": [
-            {"type": "text", "text": note} for note in notes
-        ]})
-
-
-def _parse_tool_arguments(tc: dict) -> dict:
-    """Parse arguments from a tool_call dict (may be JSON string or already dict)."""
-    args = tc.get("arguments", {})
-    if isinstance(args, str):
-        try:
-            return json.loads(args)
-        except json.JSONDecodeError:
-            return {}
-    return args or {}
-
-
-# ── main loop ───────────────────────────────────────────────────────────────
-
 def agent_loop(messages: list, context: dict):
     global rounds_since_todo
     tools, handlers = assemble_tool_pool()
@@ -117,8 +107,7 @@ def agent_loop(messages: list, context: dict):
 
     while True:
         # --- inject scheduled / background work ---
-        fired = consume_cron_queue()
-        for job in fired:
+        for job in consume_cron_queue():
             messages.append({"role": "user", "content": f"[Scheduled] {job.prompt}"})
             print(f"  \033[35m[cron inject] {job.prompt[:60]}\033[0m")
 
@@ -147,9 +136,8 @@ def agent_loop(messages: list, context: dict):
                 messages[:] = reactive_compact(messages)
                 state.has_attempted_reactive_compact = True
                 continue
-            messages.append({"role": "assistant", "content": [
-                {"type": "text", "text": f"[Error] {type(e).__name__}: {e}"}
-            ]})
+            messages.append({"role": "assistant",
+                             "content": f"[Error] {type(e).__name__}"})
             return
 
         choice = response.choices[0]
@@ -163,7 +151,7 @@ def agent_loop(messages: list, context: dict):
                 state.has_escalated = True
                 print(f"  \033[33m[max_tokens] retry with {max_tokens}\033[0m")
                 continue
-            messages.append({"role": "assistant", "content": assistant_msg.content})
+            messages.append({"role": "assistant", "content": assistant_msg.content or ""})
             if state.recovery_count < MAX_RECOVERY_RETRIES:
                 messages.append({"role": "user", "content": CONTINUATION_PROMPT})
                 state.recovery_count += 1
@@ -173,8 +161,7 @@ def agent_loop(messages: list, context: dict):
         max_tokens = DEFAULT_MAX_TOKENS
         state.has_escalated = False
 
-        # --- store assistant message (keep for history) ---
-        # Build a dict representation for our internal message list
+        # --- store assistant message ---
         stored_msg = {
             "role": "assistant",
             "content": assistant_msg.content,
@@ -192,19 +179,15 @@ def agent_loop(messages: list, context: dict):
 
         # --- check for stop ---
         if not assistant_msg.tool_calls:
-            from agent.hooks import trigger_hooks as th
-            th("Stop", messages)
+            trigger_hooks("Stop", messages)
             return
 
-        # --- execute tool calls ---
-        tool_results = []
+        # --- execute tool calls; each result is a role=tool message ---
         compacted_now = False
 
         for tc in assistant_msg.tool_calls:
             tool_name = tc.function.name
-            tool_args = _parse_tool_arguments(
-                {"arguments": tc.function.arguments}
-            )
+            tool_args = _parse_tool_arguments({"arguments": tc.function.arguments})
             tool_call_id = tc.id
 
             print(f"\033[36m> {tool_name}\033[0m")
@@ -218,7 +201,6 @@ def agent_loop(messages: list, context: dict):
                 break
 
             # --- permission hook ---
-            # Build a synthetic block object for the hook
             class ToolBlock:
                 pass
             block = ToolBlock()
@@ -228,9 +210,9 @@ def agent_loop(messages: list, context: dict):
 
             blocked = trigger_hooks("PreToolUse", block)
             if blocked:
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tool_call_id,
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
                     "content": str(blocked),
                 })
                 continue
@@ -240,9 +222,9 @@ def agent_loop(messages: list, context: dict):
                 bg_id = start_background_task(tool_name, tool_args, tool_call_id, handlers)
                 output = (f"[Background task {bg_id} started] "
                           "Result will arrive as a task_notification.")
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tool_call_id,
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
                     "content": output,
                 })
                 continue
@@ -251,24 +233,23 @@ def agent_loop(messages: list, context: dict):
             handler = handlers.get(tool_name)
             output = call_tool_handler(handler, tool_args, tool_name)
             trigger_hooks("PostToolUse", block, output)
-            print(str(output)[:300])
+            # Sanitize surrogates before printing
+            safe_out = str(output).encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace")
+            print(safe_out[:300])
 
             if tool_name == "todo_write":
                 rounds_since_todo = 0
             else:
                 rounds_since_todo += 1
 
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": tool_call_id,
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call_id,
                 "content": output,
             })
 
         if compacted_now:
             continue
-
-        # --- send tool results back to model ---
-        messages.append({"role": "user", "content": _build_user_content(tool_results)})
 
 
 def print_turn_assistants(messages: list, turn_start: int):
@@ -276,9 +257,6 @@ def print_turn_assistants(messages: list, turn_start: int):
         if msg.get("role") != "assistant":
             continue
         content = msg.get("content")
-        if isinstance(content, str):
-            terminal_print(content)
-        elif isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    terminal_print(block.get("text", ""))
+        if isinstance(content, str) and content.strip():
+            safe = content.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace")
+            terminal_print(safe)

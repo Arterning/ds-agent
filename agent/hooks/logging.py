@@ -23,14 +23,7 @@ def user_prompt_hook(query: str):
 
 
 def stop_hook(messages: list):
-    tool_count = 0
-    for msg in messages:
-        content = msg.get("content")
-        if isinstance(content, list):
-            tool_count += sum(
-                1 for item in content
-                if isinstance(item, dict) and item.get("type") == "tool_result"
-            )
+    tool_count = sum(1 for msg in messages if msg.get("role") == "tool")
     print(f"\033[90m[HOOK] Stop: {tool_count} tool result(s)\033[0m")
     return None
 

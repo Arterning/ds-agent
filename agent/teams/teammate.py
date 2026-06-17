@@ -22,7 +22,7 @@ from agent.systems.tasks import (
 )
 from agent.utils import (
     call_tool_handler, has_tool_use, extract_tool_calls,
-    extract_text, terminal_print,
+    extract_text, terminal_print, sanitize_json,
 )
 from agent.tools.bash import run_bash
 from agent.tools.file import run_read, run_write
@@ -216,7 +216,7 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
                 try:
                     response = client.chat.completions.create(
                         model=MODEL,
-                        messages=[{"role": "system", "content": system}] + messages[-20:],
+                        messages=sanitize_json([{"role": "system", "content": system}] + messages[-20:]),
                         tools=openai_tools,
                         max_tokens=8000,
                     )
@@ -246,7 +246,6 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
                     break
 
                 # --- execute tool calls ---
-                results = []
                 for tc in assistant_msg.tool_calls:
                     tool_name = tc.function.name
                     try:
@@ -264,15 +263,13 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
                         handler = sub_handlers.get(tool_name)
                         output = call_tool_handler(handler, tool_args, tool_name)
 
-                    results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tc.id,
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
                         "content": str(output),
                     })
                     if protocol_ctx["waiting_plan"]:
                         break
-
-                messages.append({"role": "user", "content": results})
                 if protocol_ctx["waiting_plan"]:
                     break
 

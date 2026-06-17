@@ -10,8 +10,27 @@ from pathlib import Path
 from agent.config import WORKDIR, PROMPT, CLI_ACTIVE, READLINE_AVAILABLE
 
 
+def sanitize(text: str) -> str:
+    """Remove lone surrogate characters that break UTF-8 encoding."""
+    if not isinstance(text, str):
+        return text
+    return text.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace")
+
+
+def sanitize_json(obj):
+    """Recursively sanitize all strings in a JSON-serialisable object."""
+    if isinstance(obj, str):
+        return sanitize(obj)
+    if isinstance(obj, dict):
+        return {k: sanitize_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_json(v) for v in obj]
+    return obj
+
+
 def terminal_print(text: str):
     """Print without clobbering the CLI input line when called from background threads."""
+    text = sanitize(text)
     if threading.current_thread() is threading.main_thread() or not CLI_ACTIVE:
         print(text)
         return
@@ -48,7 +67,10 @@ def call_tool_handler(handler, args: dict, name: str) -> str:
 # ── OpenAI message helpers ──────────────────────────────────────────────────
 
 def has_tool_use(content) -> bool:
-    """Return True when the assistant message has pending tool_calls."""
+    """Return True when the assistant message has pending tool_calls.
+    Handles OpenAI message dicts (tool_calls key) and raw API response objects."""
+    if isinstance(content, dict):
+        return bool(content.get("tool_calls"))
     if isinstance(content, list):
         return any(has_tool_use(block) for block in content)
     return getattr(content, "tool_calls", None) is not None and bool(content.tool_calls)
