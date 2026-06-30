@@ -16,3 +16,9 @@ wheels/
 
 
 reasonix.toml
+
+.playwright-mcp
+
+.mailboxes
+
+*.png

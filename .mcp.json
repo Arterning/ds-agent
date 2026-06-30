@@ -11,6 +11,12 @@
     "demo": {
       "command": "uv",
       "args": ["run", "python", "servers/mcp_demo.py"]
+    },
+     "playwright": {
+        "command": "npx",
+        "args": [
+          "@playwright/mcp@latest"
+        ]
     }
   }
 }
