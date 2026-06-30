@@ -19,7 +19,9 @@ PROMPT_SECTIONS = {
              "spawn_teammate, send_message, check_inbox, "
              "request_shutdown, request_plan, review_plan, "
              "create_worktree, remove_worktree, keep_worktree, "
-             "connect_mcp. MCP tools are prefixed mcp__{server}__{tool}.",
+             "connect_mcp. "
+             "To connect a real MCP server pass command + args (stdio) or url (HTTP). "
+             "MCP tools are prefixed mcp__{server}__{tool}.",
     "workspace": f"Working directory: {WORKDIR}",
     "memory": "Relevant memories are injected below when available.",
 }

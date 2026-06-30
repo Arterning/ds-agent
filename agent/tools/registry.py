@@ -110,8 +110,11 @@ def run_keep_worktree(name: str) -> str:
 
 # ── MCP wrapper ────────────────────────────────────────────────────────────
 
-def run_connect_mcp(name: str) -> str:
-    return connect_mcp(name)
+def run_connect_mcp(name: str, command: str | None = None,
+                    args: list[str] | None = None,
+                    url: str | None = None,
+                    env: dict[str, str] | None = None) -> str:
+    return connect_mcp(name, command=command, args=args, url=url, env=env)
 
 
 # ── Tool definitions (Anthropic-style schemas) ─────────────────────────────
@@ -256,9 +259,25 @@ BUILTIN_TOOLS = [
                       "properties": {"name": {"type": "string"}},
                       "required": ["name"]}},
     {"name": "connect_mcp",
-     "description": "Connect to an MCP server (docs, deploy) and discover tools.",
+     "description": (
+         "Connect to an MCP server. Use 'command'+'args' for a stdio subprocess, "
+         "'url' for HTTP, or just 'name' for built-in mock servers (docs, deploy). "
+         "Once connected, the server's tools appear as mcp__<server>__<tool>."
+     ),
      "input_schema": {"type": "object",
-                      "properties": {"name": {"type": "string"}},
+                      "properties": {
+                          "name": {"type": "string",
+                                   "description": "Logical name for this MCP server"},
+                          "command": {"type": "string",
+                                      "description": "Executable to launch (stdio mode)"},
+                          "args": {"type": "array",
+                                   "items": {"type": "string"},
+                                   "description": "Arguments for the command"},
+                          "url": {"type": "string",
+                                  "description": "HTTP endpoint URL (HTTP mode)"},
+                          "env": {"type": "object",
+                                  "description": "Extra environment variables"},
+                      },
                       "required": ["name"]}},
 ]
 
