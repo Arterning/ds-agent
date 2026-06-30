@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "docs": {
+      "command": "uv",
+      "args": ["run", "python", "servers/mock_docs.py"]
+    },
+    "deploy": {
+      "command": "uv",
+      "args": ["run", "python", "servers/mock_deploy.py"]
+    }
+  }
+}

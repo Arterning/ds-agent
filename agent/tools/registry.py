@@ -260,9 +260,9 @@ BUILTIN_TOOLS = [
                       "required": ["name"]}},
     {"name": "connect_mcp",
      "description": (
-         "Connect to an MCP server. Use 'command'+'args' for a stdio subprocess, "
-         "'url' for HTTP, or just 'name' for built-in mock servers (docs, deploy). "
-         "Once connected, the server's tools appear as mcp__<server>__<tool>."
+         "Connect to an MCP server at runtime. Servers in .mcp.json are "
+         "auto-connected at startup. Use 'command'+'args' for a stdio "
+         "subprocess or 'url' for HTTP. Tools become mcp__<server>__<tool>."
      ),
      "input_schema": {"type": "object",
                       "properties": {

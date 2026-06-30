@@ -20,7 +20,8 @@ PROMPT_SECTIONS = {
              "request_shutdown, request_plan, review_plan, "
              "create_worktree, remove_worktree, keep_worktree, "
              "connect_mcp. "
-             "To connect a real MCP server pass command + args (stdio) or url (HTTP). "
+             "MCP servers in .mcp.json are auto-connected at startup. "
+             "To connect a new server at runtime pass command + args (stdio) or url (HTTP). "
              "MCP tools are prefixed mcp__{server}__{tool}.",
     "workspace": f"Working directory: {WORKDIR}",
     "memory": "Relevant memories are injected below when available.",

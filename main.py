@@ -16,6 +16,7 @@ from agent.core.context import update_context
 from agent.systems.cron import consume_cron_queue, cron_scheduler_loop
 from agent.teams.protocol import consume_lead_inbox
 from agent.hooks import trigger_hooks
+from agent.tools.mcp import init_mcp
 
 # Ensure logging hooks are loaded
 import agent.hooks.logging  # noqa: F401
@@ -47,6 +48,10 @@ if __name__ == "__main__":
     CLI_ACTIVE = True
     print("ds-agent: comprehensive coding agent (DeepSeek)")
     print("Enter a question, press Enter to send. Type q to quit.\n")
+
+    # Auto-connect all MCP servers listed in .mcp.json
+    init_mcp()
+    print()
 
     history: list = []
     context = update_context({}, [])
