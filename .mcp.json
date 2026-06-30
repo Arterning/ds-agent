@@ -7,6 +7,10 @@
     "deploy": {
       "command": "uv",
       "args": ["run", "python", "servers/mock_deploy.py"]
+    },
+    "demo": {
+      "command": "uv",
+      "args": ["run", "python", "servers/mcp_demo.py"]
     }
   }
 }
