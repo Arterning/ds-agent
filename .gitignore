@@ -20,5 +20,5 @@ reasonix.toml
 .playwright-mcp
 
 .mailboxes
-
+.tasks
 *.png

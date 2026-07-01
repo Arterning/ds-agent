@@ -127,7 +127,8 @@ class RealMCPClient:
             raise ValueError("Either 'command' (stdio) or 'url' (HTTP) is required")
 
         self._transport = transport
-        read, write = await transport.__aenter__()
+        result = await transport.__aenter__()
+        read, write = result[0], result[1]
         session = ClientSession(read, write)
         await session.__aenter__()
         await session.initialize()
