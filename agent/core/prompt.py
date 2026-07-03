@@ -14,6 +14,7 @@ PROMPT_SECTIONS = {
     "identity": "You are a coding agent. Act, don't explain.",
     "tools": "Available tools: bash, read_file, write_file, edit_file, glob, "
              "todo_write, task, load_skill, compact, "
+             "web_search, web_fetch, "
              "create_task, list_tasks, get_task, claim_task, complete_task, "
              "schedule_cron, list_crons, cancel_cron, "
              "spawn_teammate, send_message, check_inbox, "

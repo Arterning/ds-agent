@@ -26,6 +26,7 @@ from agent.teams.protocol import (
     run_request_plan, run_review_plan,
 )
 from agent.tools.mcp import connect_mcp
+from agent.tools.web import web_search, web_fetch
 
 
 # ── Tool-facing wrappers for task tools ────────────────────────────────────
@@ -279,6 +280,21 @@ BUILTIN_TOOLS = [
                                   "description": "Extra environment variables"},
                       },
                       "required": ["name"]}},
+    {"name": "web_search",
+     "description": "Search the web via DuckDuckGo. Returns JSON with title, url, snippet.",
+     "input_schema": {"type": "object",
+                      "properties": {
+                          "query": {"type": "string", "description": "Search query"},
+                          "max_results": {"type": "integer", "description": "Max results (1-10)"},
+                      },
+                      "required": ["query"]}},
+    {"name": "web_fetch",
+     "description": "Fetch a URL and extract readable plain text (up to 50k chars).",
+     "input_schema": {"type": "object",
+                      "properties": {
+                          "url": {"type": "string", "description": "URL to fetch (https://...)"},
+                      },
+                      "required": ["url"]}},
 ]
 
 BUILTIN_HANDLERS = {
@@ -300,6 +316,8 @@ BUILTIN_HANDLERS = {
     "remove_worktree": run_remove_worktree,
     "keep_worktree": run_keep_worktree,
     "connect_mcp": run_connect_mcp,
+    "web_search": web_search,
+    "web_fetch": web_fetch,
 }
 
 
