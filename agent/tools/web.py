@@ -5,11 +5,14 @@ Web tools — search and fetch.
 - web_fetch:  fetch a URL and extract plain text
 """
 
+import json
 import re
+
 import requests
+from ddgs import DDGS
 from html.parser import HTMLParser
 
-DUCKDUCKGO_API = "https://api.duckduckgo.com/"
+DUCKDUCKGO_API = "https://api.duckduckgo.com/"  # kept for potential future use
 REQUEST_TIMEOUT = 15
 MAX_CONTENT_CHARS = 50_000
 
@@ -88,50 +91,29 @@ def _html_to_text(html: str) -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def web_search(query: str, max_results: int = 5) -> str:
-    """Search the web via DuckDuckGo Instant Answer API.  Returns JSON."""
+    """Search the web via DuckDuckGo.  Returns JSON with title, url, snippet."""
     if not query or not query.strip():
-        return '{"error": "query cannot be empty"}'
+        return json.dumps({"error": "query cannot be empty"}, ensure_ascii=False)
 
     max_results = min(max(max_results, 1), 10)
 
     print(f"  \033[34m[web] search: {query[:80]}\033[0m")
 
     try:
-        resp = requests.get(
-            DUCKDUCKGO_API,
-            params={"q": query.strip(), "format": "json", "no_html": 1},
-            timeout=REQUEST_TIMEOUT,
-        )
-        if resp.status_code not in (200, 202):
-            return f'{{"error": "search request failed: HTTP {resp.status_code}"}}'
-
-        data = resp.json()
         results: list[dict] = []
-
-        for topic in data.get("RelatedTopics", []):
-            if topic.get("Text") and topic.get("FirstURL"):
-                results.append({
-                    "title": topic["Text"].split(" - ")[0].strip()
-                             if " - " in topic.get("Text", "") else topic.get("Text", ""),
-                    "url": topic.get("FirstURL", ""),
-                    "snippet": topic.get("Text", ""),
-                })
-            if len(results) >= max_results:
-                break
-
-        if len(results) < max_results and data.get("AbstractText"):
-            abstract_url = data.get("AbstractURL", "")
-            if abstract_url:
-                results.append({
-                    "title": data.get("Heading", "DuckDuckGo Abstract"),
-                    "url": abstract_url,
-                    "snippet": data.get("AbstractText", ""),
-                })
+        for r in DDGS().text(query.strip(), max_results=max_results):
+            results.append({
+                "title": r.get("title", ""),
+                "url": r.get("href", ""),
+                "snippet": r.get("body", ""),
+            })
 
         if not results:
-            return '{"total": 0, "results": [], "hint": "no results, try more specific keywords"}'
+            return json.dumps({
+                "total": 0, "results": [],
+                "hint": "no results, try different keywords",
+            }, ensure_ascii=False)
 
-        import json
         return json.dumps({
             "total": len(results),
             "query": query,
@@ -140,7 +122,7 @@ def web_search(query: str, max_results: int = 5) -> str:
 
     except Exception as e:
         print(f"  \033[31m[web] search error: {e}\033[0m")
-        return f'{{"error": "{e}"}}'
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
 
 
 def web_fetch(url: str) -> str:
@@ -190,7 +172,6 @@ def web_fetch(url: str) -> str:
         if len(text) > MAX_CONTENT_CHARS:
             text = text[:MAX_CONTENT_CHARS] + "\n\n...[truncated]"
 
-        import json
         return json.dumps({
             "title": title,
             "url": url,
